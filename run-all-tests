@@ -1,0 +1,58 @@
+#!/bin/bash
+
+build_ibm_tpm() (
+    test -d ibmtpm && return
+    mkdir ibmtpm
+    curl -Ls https://downloads.sourceforge.net/project/ibmswtpm2/ibmtpm1682.tar.gz | tar xz -C ibmtpm
+    cd ibmtpm/src && make
+)
+
+start_tpm2_simulator () {
+    DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --print-address --fork)"
+    export DBUS_SESSION_BUS_ADDRESS
+    ibmtpm/src/tpm_server &
+    timeout 20 bash -c 'until printf "" 2>>/dev/null >>/dev/tcp/$0/$1; do sleep 1; done' localhost 2321
+    tpm2-abrmd --session --tcti mssim:host=localhost,port=2321 &
+    TCTI_ADDRESS="tabrmd:bus_name=com.intel.tss2.Tabrmd,bus_type=session"
+    TPM2TOOLS_TCTI="$TCTI_ADDRESS"
+    TPM2OPENSSL_TCTI="$TCTI_ADDRESS"
+    export TPM2TOOLS_TCTI
+    export TPM2OPENSSL_TCTI
+    sleep 1
+}
+
+make_check () {
+    echo "Running make check"
+    openssl version
+    tpm2_getcap properties-fixed | head -n 20
+    make check
+}
+
+make_distcheck () {
+    make distcheck
+}
+
+function cleanup()
+{
+    pkill -P $$
+}
+trap cleanup EXIT
+
+./bootstrap
+./configure CC=gcc --enable-op-digest --enable-op-cipher
+make
+make install
+
+build_ibm_tpm
+start_tpm2_simulator
+make_check
+make_distcheck
+
+#       *.log
+#       test/*.log
+#       test/*/*.log
+#       tpm2-openssl-*/_build/sub/test/*.log
+#       tpm2-openssl-*/_build/sub/test/*/*.log
+
+#     ./configure CC=gcc --enable-op-digest --enable-op-cipher --enable-code-coverage --enable-debug
+
